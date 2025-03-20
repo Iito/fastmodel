@@ -1,0 +1,11 @@
+import os
+
+APP_AUTH_TOKEN = os.getenv("APP_AUTH_TOKEN", False)
+STREAMING_BOUNDARY = os.getenv("STREAMING_BOUNDARY", "CUSTOM_BOUNDARY")
+STREAMING_CHUNK_SIZE = os.getenv("STREAMING_CHUNK_SIZE_MB", 1024 * 1024)
+MODEL_DIR = os.getenv("MODEL_DIR", None)
+if isinstance(STREAMING_CHUNK_SIZE, str):
+    STREAMING_CHUNK_SIZE = STREAMING_CHUNK_SIZE.lower().replace("mb", "").rstrip()
+    STREAMING_CHUNK_SIZE = int(STREAMING_CHUNK_SIZE) * 1024 * 1024
+IMG_FORMAT = os.getenv("IMG_FORMAT", "JPEG").upper()
+ROOT_PATH = os.getenv("ROOT_PATH", "")
