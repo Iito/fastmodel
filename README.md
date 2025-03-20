@@ -10,8 +10,13 @@ A lightweight Python package that turns any Ai inference class with a `__call__`
 
 ## Installation  
 
-Since this package is not yet on PyPI, install it manually:  
+### Using pip
 
+```bash
+pip install fastmodel
+```
+
+### From sources
 ```bash
 git clone git@github.com:Iito/fastmodel.git
 cd fastmodel
@@ -48,12 +53,13 @@ class OCRModel:
         return str(pytesseract.get_tesseract_version())
 ```
 You can try this examples as follow:
-- tesseract must be installed on the host machine.
+- tesseract and pytesseract must be installed on the host machine.
 
 ```bash
 export PYTHONPATH=`pwd`/examples:$PYTHONPATH
 fastmodel serve ocr.OCRModel
 ```
+![](demo.gif)
 
 ### Request Example  
 
