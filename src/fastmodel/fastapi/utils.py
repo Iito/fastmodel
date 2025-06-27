@@ -232,6 +232,12 @@ def _merge_models(
             + request_or_response.capitalize()
         )
 
+    if request_or_response == "response":
+        # Remove custom validators from the model
+        # it will allow to use the model in the response with potential None values even if the model has validators
+        for model in models:
+            model.__pydantic_decorators__.model_validators = {}
+
     model = create_model(
         merged_model_name,
         **fields,

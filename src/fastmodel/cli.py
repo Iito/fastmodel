@@ -328,6 +328,18 @@ INTERFACE_CHOICES = click.Choice(INTERFACES)
     default=False,
     help="Force the use of JSON responses, even when the client does not accept it.",
 )
+@click.option(
+    "--doc-url",
+    type=str,
+    default="/docs",
+    help="URL for the documentation.(default: /docs)",
+)
+@click.option(
+    "--redoc-url",
+    type=str,
+    default=None,
+    help="URL for the redoc documentation.(default: None)",
+)
 def serve(
     model: str,
     host: str,
@@ -377,6 +389,8 @@ def serve(
     factory: bool,
     log_format: str,
     force_json: bool,
+    doc_url: str,
+    redoc_url: str,
 ) -> None:
     """
     Run an ASGI application.
@@ -441,6 +455,8 @@ def serve(
         factory=factory,
         log_format=log_format,
         force_json=force_json,
+        doc_url=doc_url,
+        redoc_url=redoc_url,
     )
 
 

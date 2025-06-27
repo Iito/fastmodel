@@ -339,12 +339,12 @@ class ApiBaseRequest(APIBase):
             is_image = False
             is_base_model = False
             if isinstance(expected_type, (list, tuple)):
-                if all([x == Image for x in expected_type]):
+                if has_pil and all([x == Image for x in expected_type]):
                     is_image = True
                 if all([issubclass(x, BaseModel) for x in expected_type]):
                     is_base_model = True
             else:
-                if issubclass(expected_type, Image):
+                if has_pil and issubclass(expected_type, Image):
                     is_image = True
                 if issubclass(expected_type, BaseModel):
                     is_base_model = True

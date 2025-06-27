@@ -80,6 +80,8 @@ def run(
     errorStatusCode: StatusCode = StatusCode.Error,
     debug: bool = False,
     force_json: bool = False,
+    doc_url: str = "/docs",
+    redoc_url: str = None,
 ) -> None:
     """
     All args in this method are passed by the click command.
@@ -126,8 +128,7 @@ def run(
         logger.info("Shutting requested")
         logger.info("Shutting down")
 
-    if hasattr(MyModel, "version"):
-        model_version = MyModel.version()
+    model_version = MyModel.version() if hasattr(MyModel, "version") else None
     if model_version is None:
         model_version = importlib.metadata.version(model.split(".")[0]).split(".")[:3]
         model_version = ".".join(model_version)
@@ -136,8 +137,8 @@ def run(
         lifespan=_lifespan,
         title=f"{MyModel.__name__}",
         description=MyModel.__annotations__,
-        redoc_url=None,
-        docs_url="/",
+        redoc_url=redoc_url,
+        docs_url=doc_url,
         version=model_version or "0.0.0",
         root_path=ROOT_PATH,
     )
