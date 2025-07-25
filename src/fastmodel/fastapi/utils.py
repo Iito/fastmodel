@@ -14,7 +14,8 @@ try:
     from aiohttp.client import ClientResponse
 except ImportError:
     ClientResponse = ForwardRef("ClientResponse")
-
+from importlib.metadata import version
+PYDANTIC_VERSION = int(version("pydantic").split('.')[1])
 
 def _get_serializable_data(field_name: str, data: any) -> tuple[str, bytes]:
     """
@@ -154,7 +155,7 @@ def get_inner_data(field_name: str, data: Any) -> list[tuple[str, bytes]]:
 
 
 def _merge_models(
-    model: Type[BaseModel] | list[Type[BaseModel]],
+    models: Type[BaseModel] | list[Type[BaseModel]],
     request_or_response: Literal["request", "response"],
     base: Type[BaseModel],
 ) -> Type[BaseModel]:
@@ -168,8 +169,8 @@ def _merge_models(
     :return: The merged model-> NewModel(ApiBaseRequest, Model1, Model2, ...) or NewModel(ApiBaseResponse, Model1, Model2, ...)
 
     """
-    if not isinstance(model, list):
-        models = [model]
+    if not isinstance(models, list):
+        models = [models]
 
     request_or_response = request_or_response.lower()
 
@@ -238,12 +239,21 @@ def _merge_models(
         for model in models:
             model.__pydantic_decorators__.model_validators = {}
 
-    model = create_model(
-        merged_model_name,
-        **fields,
-        model_config=ConfigDict(arbitrary_types_allowed=True),
-        __base__=tuple([x for x in models] + [base]),
-    )
+    # TODO: pydantic~=2.11 api change
+    if PYDANTIC_VERSION > 10:
+        model = create_model(
+            merged_model_name,
+            **fields,
+            __config__=ConfigDict(arbitrary_types_allowed=True),
+            __base__=tuple([x for x in models] + [base])
+        )
+    else:
+        model = create_model(
+            merged_model_name,
+            **fields,
+            model_config=ConfigDict(arbitrary_types_allowed=True),
+            __base__=tuple([x for x in models] + [base]),
+        )
     if hasattr(model, "generate_validate_method"):
         model_repr["method_code"], model_repr["method_imports"] = model.generate_validate_method()
 
