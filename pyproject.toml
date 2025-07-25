@@ -1,6 +1,6 @@
 [tool.poetry]
 name="fastmodel"
-version="0.2.0"
+version="1.0.0"
 description = "a FastAPI model generator and Ai model serving"
 license = "MIT"
 authors = ["Iito"]
