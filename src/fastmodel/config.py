@@ -8,4 +8,4 @@ if isinstance(STREAMING_CHUNK_SIZE, str):
     STREAMING_CHUNK_SIZE = STREAMING_CHUNK_SIZE.lower().replace("mb", "").rstrip()
     STREAMING_CHUNK_SIZE = int(STREAMING_CHUNK_SIZE) * 1024 * 1024
 IMG_FORMAT = os.getenv("IMG_FORMAT", "JPEG").upper()
-ROOT_PATH = os.getenv("ROOT_PATH", "")
+ROOT_PATH = os.getenv("ROOT_PATH")
