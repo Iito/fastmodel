@@ -80,7 +80,7 @@ def run(
     errorStatusCode: StatusCode = StatusCode.Error,
     debug: bool = False,
     force_json: bool = False,
-    doc_url: str = "/docs",
+    doc_url: str = "/",
     redoc_url: str = None,
 ) -> None:
     """

@@ -331,8 +331,8 @@ INTERFACE_CHOICES = click.Choice(INTERFACES)
 @click.option(
     "--doc-url",
     type=str,
-    default="/docs",
-    help="URL for the documentation.(default: /docs)",
+    default="/",
+    help="URL for the documentation.(default: /)",
 )
 @click.option(
     "--redoc-url",
