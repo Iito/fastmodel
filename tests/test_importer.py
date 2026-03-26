@@ -12,7 +12,7 @@ from fastmodel.utils.importer import (
     _resolve_from_protocol,
     parse_import_string,
 )
-from test.conftest import (
+from tests.conftest import (
     AltArgModel,
     LegacyModel,
     ProtocolModel,

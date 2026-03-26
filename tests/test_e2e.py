@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from fastmodel.status_code import StatusCode
-from test.conftest import (
+from tests.conftest import (
     DetectionInput,
     DetectionOutput,
     DetectorLegacy,

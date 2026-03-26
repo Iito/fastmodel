@@ -6,7 +6,7 @@ import logging
 import pytest
 
 from fastmodel.utils.async_model import create_async_boot
-from test.conftest import ProtocolModel, LegacyModel, SimpleInput
+from tests.conftest import ProtocolModel, LegacyModel, SimpleInput
 
 
 class TestAsyncBoot:

@@ -5,7 +5,7 @@ from typing import ClassVar
 from pydantic import BaseModel
 
 from fastmodel.protocol import ServingModule, is_serving_module
-from test.conftest import (
+from tests.conftest import (
     ProtocolModel,
     LegacyModel,
     AltArgModel,

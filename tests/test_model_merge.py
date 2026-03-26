@@ -12,7 +12,7 @@ from fastmodel.fastapi.io import (
     create_request_model,
     create_response_model,
 )
-from test.conftest import (
+from tests.conftest import (
     DetectionBox,
     DetectionInput,
     DetectionOutput,

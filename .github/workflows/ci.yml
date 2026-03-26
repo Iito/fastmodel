@@ -26,7 +26,7 @@ jobs:
           pip install pytest pytest-asyncio httpx
 
       - name: Run tests
-        run: pytest test/ -v --tb=short
+        run: pytest tests/ -v --tb=short
 
   benchmark:
     runs-on: ubuntu-latest
@@ -46,13 +46,13 @@ jobs:
       - name: Run benchmarks
         run: |
           echo "::group::Protocol vs Legacy Resolution"
-          python test/bench_complex.py
+          python tests/bench_complex.py
           echo "::endgroup::"
 
           echo "::group::Build Phase Profile"
-          python test/profile_build.py
+          python tests/profile_build.py
           echo "::endgroup::"
 
           echo "::group::End-to-End Pipeline"
-          python test/bench_e2e.py
+          python tests/bench_e2e.py
           echo "::endgroup::"
