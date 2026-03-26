@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -e ".[dev]" 2>/dev/null || pip install -e .
+          pip install pytest pytest-asyncio
+
+      - name: Run tests
+        run: pytest test/ -v --tb=short
+
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -e .
+          pip install httpx
+
+      - name: Run benchmarks
+        run: |
+          echo "::group::Protocol vs Legacy Resolution"
+          python test/bench_complex.py
+          echo "::endgroup::"
+
+          echo "::group::Build Phase Profile"
+          python test/profile_build.py
+          echo "::endgroup::"
+
+          echo "::group::End-to-End Pipeline"
+          python test/bench_e2e.py
+          echo "::endgroup::"

@@ -128,10 +128,16 @@ def run(
         logger.info("Shutting requested")
         logger.info("Shutting down")
 
-    model_version = MyModel.version() if hasattr(MyModel, "version") else None
-    if model_version is None:
-        model_version = importlib.metadata.version(model.split(".")[0]).split(".")[:3]
-        model_version = ".".join(model_version)
+    if hasattr(MyModel, "MODULE_VERSION"):
+        model_version = MyModel.MODULE_VERSION
+    elif hasattr(MyModel, "version") and callable(MyModel.version):
+        model_version = MyModel.version()
+    else:
+        try:
+            model_version = importlib.metadata.version(model.split(".")[0]).split(".")[:3]
+            model_version = ".".join(model_version)
+        except importlib.metadata.PackageNotFoundError:
+            model_version = "0.0.0"
 
     app = FastAPI(
         lifespan=_lifespan,
@@ -196,12 +202,6 @@ def run(
                 logger.exception(f"Invalid input {e}")
                 _response.status = StatusCode.InvalidInput
                 _response.message = StatusCode.InvalidInput.msg
-            # except TypeError as e:
-            #     model_args = {MyModelInputArg: model_input.process()}
-            #     _response: MyModelOutput = model(**model_args)
-            # except ValueError as e:
-            #     model_args = {MyModelInputArg: model_input.process()}
-            #     _response: MyModelOutput = model(**model_args)
 
             response.status = successStatusCode
             response.message = successStatusCode.msg
