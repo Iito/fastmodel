@@ -18,6 +18,7 @@ from uvicorn.config import (
 )
 
 from .serve import run
+from .backends.serve_gguf import run_gguf
 
 LEVEL_CHOICES = click.Choice(list(LOG_LEVELS.keys()))
 HTTP_CHOICES = click.Choice(list(HTTP_PROTOCOLS.keys()))
@@ -467,6 +468,46 @@ def cli() -> None:
 
 
 cli.add_command(serve)
+
+
+@click.command("serve-gguf")
+@click.argument("model")
+@click.option("--host", type=str, default="127.0.0.1", help="Bind socket to this host.", show_default=True)
+@click.option("--port", type=int, default=8000, help="Bind socket to this port.", show_default=True)
+@click.option("--n-gpu-layers", type=int, default=-1, help="GPU layers to offload (-1 = all).", show_default=True)
+@click.option("--n-ctx", type=int, default=4096, help="Context window size.", show_default=True)
+@click.option("--log-level", type=LEVEL_CHOICES, default="info", help="Log level.", show_default=True)
+def serve_gguf_cmd(
+    model: str,
+    host: str,
+    port: int,
+    n_gpu_layers: int,
+    n_ctx: int,
+    log_level: str,
+) -> None:
+    """Serve a GGUF model with an Ollama-compatible API.
+
+    MODEL is an Ollama model name (e.g. llama3.1:8b, nemotron-3-nano:4b)
+    or a path to a .gguf file.
+
+    \b
+    Examples:
+        fastmodel serve-gguf nemotron-3-nano:4b
+        fastmodel serve-gguf llama3.1:8b --port 8321
+        fastmodel serve-gguf /path/to/model.gguf --n-ctx 8192
+    """
+    art.tprint("\t\tServe GGUF", font="tarty1")
+    run_gguf(
+        model_name=model,
+        host=host,
+        port=port,
+        n_gpu_layers=n_gpu_layers,
+        n_ctx=n_ctx,
+        log_level=log_level,
+    )
+
+
+cli.add_command(serve_gguf_cmd)
 
 
 def main() -> None:

@@ -1,75 +1,67 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.10", "3.12", "3.13"]
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install -e ".[dev]" 2>/dev/null || pip install -e .
-          pip install pytest pytest-asyncio httpx
-
-      - name: Run tests
-        run: pytest tests/ -v --tb=short
-
-  publish:
-    needs: test
+  release:
     runs-on: ubuntu-latest
     environment: pypi
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Install build tools
-        run: pip install --upgrade pip build twine
-
-      - name: Extract version from tag
+      - name: Promote RC to final version
         id: version
+        shell: bash
         run: |
-          TAG="${GITHUB_REF#refs/tags/v}"
-          # Convert tag to PEP 440: v1.1.0-rc.1 → 1.1.0rc1, v1.1.0-dev.1 → 1.1.0.dev1
-          PEP440=$(echo "$TAG" | sed -E 's/-rc\./rc/; s/-dev\./.dev/; s/-alpha\./.a/; s/-beta\./.b/')
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "pep440=$PEP440" >> "$GITHUB_OUTPUT"
+          python <<'PY'
+          import os
+          import re
+          from pathlib import Path
 
-          # Detect pre-release
-          if echo "$PEP440" | grep -qE '(rc|dev|\.a|\.b)[0-9]+$'; then
-            echo "prerelease=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "prerelease=false" >> "$GITHUB_OUTPUT"
-          fi
+          version_text = Path("pyproject.toml").read_text(encoding="utf-8")
+          match = re.search(r'^version="([^"]+)"$', version_text, re.MULTILINE)
+          if not match:
+              raise SystemExit("Could not find version in pyproject.toml")
 
-          echo "Version: $PEP440 (prerelease=${{ steps.version.outputs.prerelease || 'computing' }})"
+          current_version = match.group(1)
+          rc_match = re.fullmatch(r"(\d+\.\d+\.\d+)rc\d+", current_version)
+          if not rc_match:
+              raise SystemExit(f"Current version is not an RC: {current_version}")
 
-      - name: Inject version
+          final_version = rc_match.group(1)
+          output = Path(os.environ["GITHUB_OUTPUT"])
+          output.write_text(
+              f"current={current_version}\nversion={final_version}\ntag=v{final_version}\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Update version files
+        shell: bash
         run: |
-          VERSION="${{ steps.version.outputs.pep440 }}"
+          VERSION="${{ steps.version.outputs.version }}"
           sed -i "s/^__version__ = .*/__version__ = \"$VERSION\"/" src/fastmodel/__init__.py
           sed -i "s/^version=.*/version=\"$VERSION\"/" pyproject.toml
-          echo "Injected version: $VERSION"
-          grep __version__ src/fastmodel/__init__.py
-          grep "^version=" pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -e ".[dev]" 2>/dev/null || pip install -e .
+          pip install build twine pytest pytest-asyncio httpx
+
+      - name: Run tests
+        run: pytest tests/ -v --tb=short
 
       - name: Build package
         run: python -m build
@@ -82,3 +74,21 @@ jobs:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
         run: twine upload dist/*
+
+      - name: Commit release version and tag
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/fastmodel/__init__.py pyproject.toml
+          git commit -m "build: release version $VERSION"
+          git tag "v$VERSION"
+
+      - name: Push release commit and tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          git push origin HEAD:main
+          git push origin "${{ steps.version.outputs.tag }}"
