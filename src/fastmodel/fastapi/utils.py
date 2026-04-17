@@ -1,6 +1,5 @@
 import json
 import warnings
-from inspect import isclass
 from io import BytesIO
 from typing import Any, ForwardRef, Literal, Optional, Type, get_type_hints
 
@@ -172,234 +171,82 @@ def _merge_models(
     if not isinstance(models, list):
         models = [models]
 
-    request_or_response = request_or_response.lower()
+    is_response = request_or_response.lower() == "response"
 
+    # Build merged model name
+    merged_model_name = _build_merged_name(models, request_or_response)
+
+    # Collect fields — response wraps in Optional[T]=None, request inherits as-is
     fields = {}
-    merged_model_name = ""
-    inherited_classes: list[str] = [base.__name__]
-    imports: dict[str, list[str]] = _get_base_imports(base)
-    param_code = []
-    model_repr = {
-        "imports": imports,
-        "param_code": param_code,
-        "inherited_classes": inherited_classes,
-    }
-    skipping_keys = ["model_config", "validate", "_validate", "_args_signature"]
-    skipping_keys.extend(base.model_fields.keys())
+    skipping_keys = set(base.model_fields.keys()) | {"model_config", "validate", "_validate", "_args_signature"}
 
-    skipping_keys
     for m in models:
-        inherited_classes.append(m.__name__)
-        _get_imports(imports, m)
-
-        model_name = m.__name__
-        prefix = "From" if "Output" in model_name else ""
-        postfix = "To" if "Input" in model_name else ""
-        model_name = model_name.replace("Input", "").replace("Output", "")
-        merged_model_name += "".join([prefix, model_name, postfix])
-
         for field_name, field_type in get_type_hints(m).items():
             if field_name in skipping_keys or field_name.startswith("_"):
                 continue
-            elif field_name in base.model_fields.keys() and base.__qualname__ == "ApiBaseResponse":
-                field_info = base.model_fields[field_name]
-                new_field = (field_type, field_info)
-            else:
-                field = m.model_fields[field_name]
-                mapping = field.json_schema_extra
-                new_type = field_type
-                if field.metadata and base.__qualname__ == "ApiBaseResponse":
-                    new_type = field.metadata[0].__class__[field_type]
 
-                new_field = (
-                    new_type if base.__qualname__ == "ApiBaseRequest" else Optional[new_type],
+            if is_response:
+                # Response: make all user fields Optional with default=None
+                new_type = field_type
+                field = m.model_fields[field_name]
+                if field.metadata:
+                    new_type = field.metadata[0].__class__[field_type]
+                fields[field_name] = (Optional[new_type], None)
+            else:
+                # Request: preserve original type and default
+                field = m.model_fields[field_name]
+                fields[field_name] = (
+                    field_type,
                     Field(
-                        default=field.default if base.__qualname__ == "ApiBaseRequest" else None,
+                        default=field.default,
                         description=field.description,
                         alias=field.alias,
                         title=field.title,
                         examples=field.examples,
-                        **mapping if mapping else {},
+                        **(field.json_schema_extra or {}),
                     ),
                 )
-            fields[field_name] = new_field
-            if base.__qualname__ == "ApiBaseResponse":
-                _get_param_code(param_code, field_name, new_field)
-                _get_imports(imports, field_type)
 
-    if len(models) == 1:
-        merged_model_name = (
-            models[0].__name__.replace("Input", "").replace("Output", "")
-            + request_or_response.capitalize()
-        )
-
-    if request_or_response == "response":
-        # Remove custom validators from the model
-        # it will allow to use the model in the response with potential None values even if the model has validators
+    if is_response:
         for model in models:
             model.__pydantic_decorators__.model_validators = {}
 
-    # TODO: pydantic~=2.11 api change
+    bases = tuple(models + [base])
     if PYDANTIC_VERSION > 10:
         model = create_model(
             merged_model_name,
             **fields,
             __config__=ConfigDict(arbitrary_types_allowed=True),
-            __base__=tuple([x for x in models] + [base])
+            __base__=bases,
         )
     else:
         model = create_model(
             merged_model_name,
             **fields,
             model_config=ConfigDict(arbitrary_types_allowed=True),
-            __base__=tuple([x for x in models] + [base]),
+            __base__=bases,
         )
-    if hasattr(model, "generate_validate_method"):
-        model_repr["method_code"], model_repr["method_imports"] = model.generate_validate_method()
 
-    model._repr = _get_class_code(merged_model_name, model_repr)
+    if hasattr(model, "generate_validate_method"):
+        model.generate_validate_method()
+
     return model
 
 
-def _get_class_code(name: str, model_repr: dict) -> str:
-    """
-    Generate the class code from the model representation.
-    param name: The name of the class.
-    param model_repr: The model representation.
-    return: The class code.
-    """
-    source_code = ""
-    for _module, _imports in model_repr["imports"].items():
-        if not _imports:
-            source_code += f"""
-import {_module}\
-"""
-        else:
-            source_code += f"""
-from {_module} import {", ".join(sorted(_imports))}
-"""
-    if "method_imports" in model_repr:
-        for _import in model_repr["method_imports"]:
-            source_code += _import.strip().rstrip().replace("\n", "") + "\n"
-    param_code = [
-        "\t" + x.strip().rstrip().replace("\n", "") + "\n" for x in model_repr["param_code"]
-    ]
-    source_code += f"""
-class {name}({", ".join(model_repr["inherited_classes"])}):
-{"".join(param_code)}
-"""
-    if "method_code" in model_repr:
-        for lines in model_repr["method_code"]:
-            lines = lines.replace("\n", "\n\t")
-            source_code += lines
-
-    return source_code
-
-
-def _get_inner_repr(var_type) -> str:
-    """
-    Get the inner representation of a variable type.
-    eg. Optional[str] -> str or data: str | int -> str
-    :param var_type: The variable type.
-    :return: The inner representation.
-    """
-    if hasattr(var_type, "__args__"):
-        names = [_get_inner_repr(x) for x in var_type.__args__]
-        annotated = None
-        if "NoneType" in names:
-            annotated = "Optional"
-        names = [x for x in names if x != "NoneType"]
-        if len(names) == 1:
-            var_type = names[0] if not annotated else f"{annotated}[{names[0]}]"
-        else:
-            var_type = (
-                f"{annotated}[{', '.join(names)}]"
-                if "NoneType" in names
-                else f"{annotated}[{', '.join(names)}]"
-            )
-    elif hasattr(var_type, "__qualname__"):
-        var_type = var_type.__qualname__
-    else:
-        var_type = var_type.__repr__()
-    return var_type
-
-
-def _get_param_code(class_code: list, var_name, var_field) -> None:
-    """
-    Generate the code for all the parameters of the class.
-    :param class_code: The class code.
-    :param var_name: The variable name.
-    :param var_field: The variable field.
-    """
-    var_type = var_field[0]
-    field_info = var_field[1]
-
-    var_type = _get_inner_repr(var_type)
-    _class_code = f"{var_name}: {var_type} = Field("
-
-    for k in field_info.__slotnames__:
-        if k.startswith("_") or k == "annotation":
-            continue
-        attr = getattr(field_info, k)
-        if attr:
-            if isclass(attr):
-                attr = attr.__name__
-            if isinstance(attr, (tuple, list)):
-                attrs = []
-                for a in attr:
-                    if isclass(a):
-                        attrs.append(a.__name__)
-                    elif hasattr(a, "value"):
-                        attrs.append(str(a.value))
-                    else:
-                        attrs.append(repr(a))
-                attr = "[" + ", ".join(attrs) + "]"
-
-            else:
-                attr = repr(attr)
-            _class_code += f"{k}={attr}, "
-    _class_code += "), \n"
-    class_code.append(_class_code)
-
-
-def _get_imports(imports: dict, imported_class: Any) -> None:
-    """
-    Get all the import required for the class based on the type hints.
-    :param imported_class: The imported class.
-    :param imports: The imports dictionary.
-
-    """
-    if not hasattr(imported_class, "__name__"):
-        if hasattr(imported_class, "__args__"):
-            for arg in imported_class.__args__:
-                _get_imports(imports, arg)
-        return
-    _module = imported_class.__module__
-    _name = imported_class.__name__
-    if _module == "builtins":
-        return
-
-    if _module not in imports:
-        imports[_module] = []
-
-    if imported_class.__name__ not in imports[_module]:
-        imports[_module].append(_name)
-
-
-def _get_base_imports(inherited_model: Type[BaseModel]) -> dict:
-    """
-    Helper function to get the base imports to generate FastAPI Request models.
-    :param inherited_model: The inherited model.
-    :return: The base imports.
-    """
-    return {
-        "io": ["BytesIO"],
-        "typing": ["Any", "ClassVar", "Literal", "Optional", "Type", "Union"],
-        "json": [],
-        "fastapi": ["File", "Form", "UploadFile", "status"],
-        "fastapi.encoders": ["jsonable_encoder"],
-        "fastapi.exceptions": ["HTTPException"],
-        "fastapi.responses": ["JSONResponse", "StreamingResponse"],
-        "pydantic": ["BaseModel", "ConfigDict", "Field", "ValidationError", "field_validator"],
-        inherited_model.__module__: [inherited_model.__qualname__],
-    }
+def _build_merged_name(
+    models: list[Type[BaseModel]], request_or_response: str
+) -> str:
+    """Generate the merged model class name."""
+    if len(models) == 1:
+        return (
+            models[0].__name__.replace("Input", "").replace("Output", "")
+            + request_or_response.capitalize()
+        )
+    name = ""
+    for m in models:
+        model_name = m.__name__
+        prefix = "From" if "Output" in model_name else ""
+        postfix = "To" if "Input" in model_name else ""
+        model_name = model_name.replace("Input", "").replace("Output", "")
+        name += f"{prefix}{model_name}{postfix}"
+    return name

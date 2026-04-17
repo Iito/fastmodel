@@ -1,23 +1,37 @@
 # This is a modified version of the uvicorn.importer module from the Uvicorn project.
 
 import importlib
-import warnings
-from typing import Any, Tuple, Type
 import inspect
+import warnings
+from functools import lru_cache
+from typing import Any, Tuple, Type
+
+from ..protocol import is_serving_module
+
 
 class ImportFromStringError(Exception):
     pass
 
 
-def import_from_string(import_str: Any) -> Tuple[Type, Type, Type]:
+@lru_cache(maxsize=None)
+def _cached_signature(cls: Type) -> inspect.Signature:
+    return inspect.signature(cls.__call__)
+
+
+def import_from_string(import_str: Any) -> Tuple[Type, Tuple[str, Type], Tuple[str, Type]]:
     if not isinstance(import_str, str):
         return import_str
 
     module_str, input_model_str, output_model_str = parse_import_string(import_str)
     model_class = import_model_class(module_str)
-    input_model_class = validate_model_class(input_model_str, model_class, "input")
-    output_model_class = validate_model_class(output_model_str, model_class, "return")
 
+    # Fast path: protocol-compliant class with ClassVars
+    if is_serving_module(model_class):
+        return _resolve_from_protocol(model_class, input_model_str, output_model_str)
+
+    # Fallback: legacy annotation introspection
+    input_model_class = _resolve_from_annotations(input_model_str, model_class, "input")
+    output_model_class = _resolve_from_annotations(output_model_str, model_class, "return")
     return model_class, input_model_class, output_model_class
 
 
@@ -60,52 +74,114 @@ def import_model_class(module_str: str) -> Type:
         raise ImportFromStringError(f'Could not import module "{module_str}".')
 
 
-def validate_model_class(
+# ── Protocol-aware resolution ──
+
+
+def _resolve_from_protocol(
+    model_class: Type, input_model_str: str | None, output_model_str: str | None
+) -> Tuple[Type, Tuple[str, Type], Tuple[str, Type]]:
+    """Resolve IO types directly from ServingModule ClassVars."""
+    input_type = model_class.INPUT_TYPE
+    output_type = model_class.OUTPUT_TYPE
+
+    if input_model_str:
+        override = import_class(input_model_str)
+        if override != input_type:
+            warnings.warn(
+                f"Overriding INPUT_TYPE {input_type.__name__} with {input_model_str}"
+            )
+        input_type = override
+
+    if output_model_str:
+        override = import_class(output_model_str)
+        if override != output_type:
+            warnings.warn(
+                f"Overriding OUTPUT_TYPE {output_type.__name__} with {output_model_str}"
+            )
+        output_type = override
+
+    input_arg = _get_call_input_arg(model_class)
+    return model_class, (input_arg, input_type), ("return", output_type)
+
+
+def _get_call_input_arg(model_class: Type) -> str:
+    """Get the first non-self parameter name from __call__.
+
+    Fast path: read __code__.co_varnames directly (avoids inspect.signature).
+    Fallback: use cached inspect.signature for edge cases (e.g. decorators).
+    """
+    code = getattr(model_class.__call__, "__code__", None)
+    if code and code.co_varnames:
+        # co_varnames starts with arg names; skip 'self'
+        for name in code.co_varnames[: code.co_argcount]:
+            if name != "self":
+                return name
+
+    # Fallback for wrapped/decorated __call__
+    params = _cached_signature(model_class).parameters
+    for name in params:
+        if name != "self":
+            return name
+
+    raise ImportFromStringError(
+        f"{model_class.__name__}.__call__ must accept at least one parameter."
+    )
+
+
+# ── Legacy annotation-based resolution ──
+
+
+def _resolve_from_annotations(
     model_str: str, model_class: Type, annotation_key: str
-) -> tuple[str, Type]:
+) -> Tuple[str, Type]:
+    """Fall back to __call__ annotation introspection for non-protocol models."""
     if not hasattr(model_class, "__call__"):
         raise ImportFromStringError(f"Model {model_class.__name__} must be callable.")
 
     expected_model = None
     call_annotations = model_class.__call__.__annotations__
-    for annotation in [annotation_key, annotation_key + "_data"]:
+
+    # Try direct annotation match: e.g. "input", "input_data", "return"
+    for annotation in (annotation_key, annotation_key + "_data"):
         expected_model = call_annotations.get(annotation)
         if expected_model:
             annotation_key = annotation
             break
+
     if not expected_model:
-        # This means that there is no annotation for the input or return value
-        # If the IO is given as a string, we can assign it to the input or return value
-        if annotation_key == "input":
-            for annotation in [annotation_key, annotation_key + "_data"]:
-                if inspect.signature(model_class.__call__).parameters.get(annotation):
-                    # This means we found the argument name for the input or return value
+        # No annotation found — check if parameter/return exists without type hint
+        sig = _cached_signature(model_class)
+        if annotation_key in ("input", "input_data"):
+            for key in (annotation_key, annotation_key + "_data"):
+                if sig.parameters.get(key):
                     expected_model = True if model_str else False
-                    annotation_key = annotation
+                    annotation_key = key
                     break
         if annotation_key == "return":
-            if inspect.signature(model_class.__call__).return_annotation:
+            if sig.return_annotation is not inspect.Parameter.empty:
                 expected_model = True if model_str else False
-                annotation_key = "return"
-    
-    print(model_str, expected_model, annotation_key)
+
     if not expected_model:
-        raise ImportFromStringError(f"No {annotation_key} model found in {model_class.__name__}. "\
-                                    f"Please provide the IO such as `fastmodel serve {model_class.__name__}:INPUT->OUTPUT`.")
-            
+        raise ImportFromStringError(
+            f"No {annotation_key} model found in {model_class.__name__}. "
+            f"Please provide the IO such as `fastmodel serve {model_class.__name__}:INPUT->OUTPUT`."
+        )
+
     selected_model = expected_model
     if model_str:
         if hasattr(expected_model, "__name__") and model_str != expected_model.__name__:
             if not issubclass(selected_model, expected_model):
                 warnings.warn(
-                    f'Expected {annotation_key} model "{expected_model.__name__}" but got "{model_str}", proceeding but this may break the web server.'
+                    f'Expected {annotation_key} model "{expected_model.__name__}" '
+                    f'but got "{model_str}", proceeding but this may break the web server.'
                 )
         else:
             warnings.warn(f"{model_str} will be used as the {annotation_key} model.")
         selected_model = import_class(model_str)
     elif expected_model:
         warnings.warn(
-            f"No {annotation_key} model provided, using {selected_model.__name__} found in {model_class.__name__}."
+            f"No {annotation_key} model provided, using {selected_model.__name__} "
+            f"found in {model_class.__name__}."
         )
     else:
         try:
@@ -113,13 +189,14 @@ def validate_model_class(
                 if key == "return":
                     continue
                 if annotation_key in value.__name__.lower():
-                    selected_model = validate_model_class(model_str, model_class, key)
+                    selected_model = _resolve_from_annotations(model_str, model_class, key)
                     if selected_model:
                         break
-        except:
+        except (AttributeError, KeyError, TypeError):
             raise ImportFromStringError(
                 f"No {annotation_key} model found in {model_class.__name__}."
             )
+
     return (annotation_key, selected_model)
 
 

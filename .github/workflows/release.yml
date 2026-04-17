@@ -1,0 +1,84 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -e ".[dev]" 2>/dev/null || pip install -e .
+          pip install pytest pytest-asyncio httpx
+
+      - name: Run tests
+        run: pytest tests/ -v --tb=short
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    environment: pypi
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tools
+        run: pip install --upgrade pip build twine
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          TAG="${GITHUB_REF#refs/tags/v}"
+          # Convert tag to PEP 440: v1.1.0-rc.1 → 1.1.0rc1, v1.1.0-dev.1 → 1.1.0.dev1
+          PEP440=$(echo "$TAG" | sed -E 's/-rc\./rc/; s/-dev\./.dev/; s/-alpha\./.a/; s/-beta\./.b/')
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "pep440=$PEP440" >> "$GITHUB_OUTPUT"
+
+          # Detect pre-release
+          if echo "$PEP440" | grep -qE '(rc|dev|\.a|\.b)[0-9]+$'; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "Version: $PEP440 (prerelease=${{ steps.version.outputs.prerelease || 'computing' }})"
+
+      - name: Inject version
+        run: |
+          VERSION="${{ steps.version.outputs.pep440 }}"
+          sed -i "s/^__version__ = .*/__version__ = \"$VERSION\"/" src/fastmodel/__init__.py
+          sed -i "s/^version=.*/version=\"$VERSION\"/" pyproject.toml
+          echo "Injected version: $VERSION"
+          grep __version__ src/fastmodel/__init__.py
+          grep "^version=" pyproject.toml
+
+      - name: Build package
+        run: python -m build
+
+      - name: Verify package
+        run: twine check dist/*
+
+      - name: Publish to PyPI
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: twine upload dist/*
