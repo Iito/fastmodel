@@ -1,4 +1,4 @@
-name: Version
+name: Version RC
 
 on:
   push:
@@ -8,7 +8,7 @@ permissions:
   contents: write
 
 jobs:
-  bump-version:
+  bump-rc:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
@@ -20,7 +20,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Compute next version
+      - name: Compute next RC version
         id: version
         shell: bash
         run: |
@@ -29,6 +29,8 @@ jobs:
           import re
           import subprocess
           from pathlib import Path
+
+          VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:rc(\d+))?$")
 
           def run(*args: str) -> str:
               return subprocess.check_output(args, text=True).strip()
@@ -39,53 +41,65 @@ jobs:
               except subprocess.CalledProcessError:
                   return ""
 
-          latest_tag = try_run("git", "describe", "--tags", "--abbrev=0", "--match", "v*")
-          rev_range = f"{latest_tag}..HEAD" if latest_tag else "HEAD"
-          raw_log = run("git", "log", "--format=%s%n%b%x00", rev_range)
-          commits = [entry.strip() for entry in raw_log.split("\0") if entry.strip()]
+          def parse_version(value: str) -> tuple[int, int, int, int | None]:
+              match = VERSION_RE.fullmatch(value)
+              if not match:
+                  raise SystemExit(f"Unsupported version format: {value}")
+              major, minor, patch, rc = match.groups()
+              return int(major), int(minor), int(patch), int(rc) if rc else None
 
-          bump = None
-          for commit in commits:
-              subject, _, body = commit.partition("\n")
-              if "BREAKING CHANGE:" in body or re.match(r"^[a-zA-Z0-9_-]+(\([^)]+\))?!:", subject):
-                  bump = "major"
-                  break
-              if subject.startswith("feat") and bump != "major":
-                  bump = "minor"
-              elif (
-                  bump is None
-                  and re.match(r"^(fix|perf|refactor|build|chore|docs|test|ci)(\([^)]+\))?:", subject)
-              ):
-                  bump = "patch"
-
-          output = Path(os.environ["GITHUB_OUTPUT"])
-          if bump is None:
-              output.write_text("changed=false\n", encoding="utf-8")
-              raise SystemExit(0)
+          def detect_bump(subjects: list[str]) -> str | None:
+              bump = None
+              for commit in subjects:
+                  subject, _, body = commit.partition("\n")
+                  if "BREAKING CHANGE:" in body or re.match(r"^[a-zA-Z0-9_-]+(\([^)]+\))?!:", subject):
+                      return "major"
+                  if subject.startswith("feat"):
+                      bump = "minor"
+                  elif (
+                      bump is None
+                      and re.match(r"^(fix|perf|refactor|build|chore|docs|test|ci)(\([^)]+\))?:", subject)
+                  ):
+                      bump = "patch"
+              return bump
 
           version_text = Path("pyproject.toml").read_text(encoding="utf-8")
           match = re.search(r'^version="([^"]+)"$', version_text, re.MULTILINE)
           if not match:
               raise SystemExit("Could not find version in pyproject.toml")
 
-          major, minor, patch = map(int, match.group(1).split("."))
-          if bump == "major":
-              major, minor, patch = major + 1, 0, 0
-          elif bump == "minor":
-              minor, patch = minor + 1, 0
-          else:
-              patch += 1
+          current_version = match.group(1)
+          major, minor, patch, rc = parse_version(current_version)
+          output = Path(os.environ["GITHUB_OUTPUT"])
 
-          next_version = f"{major}.{minor}.{patch}"
+          if rc is not None:
+              next_version = f"{major}.{minor}.{patch}rc{rc + 1}"
+          else:
+              stable_tag = f"v{major}.{minor}.{patch}"
+              rev_range = f"{stable_tag}..HEAD" if try_run("git", "rev-parse", stable_tag) else "HEAD"
+              raw_log = run("git", "log", "--format=%s%n%b%x00", rev_range)
+              commits = [entry.strip() for entry in raw_log.split("\0") if entry.strip()]
+              bump = detect_bump(commits)
+              if bump is None:
+                  output.write_text("changed=false\n", encoding="utf-8")
+                  raise SystemExit(0)
+              if bump == "major":
+                  major, minor, patch = major + 1, 0, 0
+              elif bump == "minor":
+                  minor, patch = minor + 1, 0
+              else:
+                  patch += 1
+              next_version = f"{major}.{minor}.{patch}rc1"
+
           output.write_text(
-              f"changed=true\nbump={bump}\nversion={next_version}\ntag=v{next_version}\n",
+              f"changed=true\nversion={next_version}\ntag=v{next_version}\n",
               encoding="utf-8",
           )
           PY
 
       - name: Stop when no releasable commits were found
         if: steps.version.outputs.changed != 'true'
-        run: echo "No version bump needed."
+        run: echo "No RC bump needed."
 
       - name: Update version files
         if: steps.version.outputs.changed == 'true'
@@ -95,7 +109,33 @@ jobs:
           sed -i "s/^__version__ = .*/__version__ = \"$VERSION\"/" src/fastmodel/__init__.py
           sed -i "s/^version=.*/version=\"$VERSION\"/" pyproject.toml
 
-      - name: Commit version bump
+      - name: Install dependencies
+        if: steps.version.outputs.changed == 'true'
+        run: |
+          pip install --upgrade pip
+          pip install -e ".[dev]" 2>/dev/null || pip install -e .
+          pip install build twine pytest pytest-asyncio httpx
+
+      - name: Run tests
+        if: steps.version.outputs.changed == 'true'
+        run: pytest tests/ -v --tb=short
+
+      - name: Build package
+        if: steps.version.outputs.changed == 'true'
+        run: python -m build
+
+      - name: Verify package
+        if: steps.version.outputs.changed == 'true'
+        run: twine check dist/*
+
+      - name: Upload RC artifacts
+        if: steps.version.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: fastmodel-${{ steps.version.outputs.version }}
+          path: dist/*
+
+      - name: Commit RC version bump
         if: steps.version.outputs.changed == 'true'
         shell: bash
         run: |
@@ -103,10 +143,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src/fastmodel/__init__.py pyproject.toml
-          git commit -m "build: bump version to $VERSION"
+          git commit -m "build: bump RC version to $VERSION"
           git tag "v$VERSION"
 
-      - name: Push version bump and tag
+      - name: Push RC version bump and tag
         if: steps.version.outputs.changed == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
