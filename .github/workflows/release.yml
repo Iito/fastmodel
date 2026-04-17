@@ -62,14 +62,14 @@ jobs:
 
           echo "Version: $PEP440 (prerelease=${{ steps.version.outputs.prerelease || 'computing' }})"
 
-      - name: Inject version
+      - name: Validate baked version
         run: |
           VERSION="${{ steps.version.outputs.pep440 }}"
-          sed -i "s/^__version__ = .*/__version__ = \"$VERSION\"/" src/fastmodel/__init__.py
-          sed -i "s/^version=.*/version=\"$VERSION\"/" pyproject.toml
-          echo "Injected version: $VERSION"
-          grep __version__ src/fastmodel/__init__.py
-          grep "^version=" pyproject.toml
+          PYPROJECT_VERSION=$(grep '^version="' pyproject.toml | sed -E 's/version="([^"]+)"/\1/')
+          PACKAGE_VERSION=$(grep '^__version__ = "' src/fastmodel/__init__.py | sed -E 's/__version__ = "([^"]+)"/\1/')
+          test "$PYPROJECT_VERSION" = "$VERSION"
+          test "$PACKAGE_VERSION" = "$VERSION"
+          echo "Validated version: $VERSION"
 
       - name: Build package
         run: python -m build

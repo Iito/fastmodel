@@ -1,0 +1,116 @@
+name: Version
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  bump-version:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Compute next version
+        id: version
+        shell: bash
+        run: |
+          python <<'PY'
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+
+          def run(*args: str) -> str:
+              return subprocess.check_output(args, text=True).strip()
+
+          def try_run(*args: str) -> str:
+              try:
+                  return run(*args)
+              except subprocess.CalledProcessError:
+                  return ""
+
+          latest_tag = try_run("git", "describe", "--tags", "--abbrev=0", "--match", "v*")
+          rev_range = f"{latest_tag}..HEAD" if latest_tag else "HEAD"
+          raw_log = run("git", "log", "--format=%s%n%b%x00", rev_range)
+          commits = [entry.strip() for entry in raw_log.split("\0") if entry.strip()]
+
+          bump = None
+          for commit in commits:
+              subject, _, body = commit.partition("\n")
+              if "BREAKING CHANGE:" in body or re.match(r"^[a-zA-Z0-9_-]+(\([^)]+\))?!:", subject):
+                  bump = "major"
+                  break
+              if subject.startswith("feat") and bump != "major":
+                  bump = "minor"
+              elif (
+                  bump is None
+                  and re.match(r"^(fix|perf|refactor|build|chore|docs|test|ci)(\([^)]+\))?:", subject)
+              ):
+                  bump = "patch"
+
+          output = Path(os.environ["GITHUB_OUTPUT"])
+          if bump is None:
+              output.write_text("changed=false\n", encoding="utf-8")
+              raise SystemExit(0)
+
+          version_text = Path("pyproject.toml").read_text(encoding="utf-8")
+          match = re.search(r'^version="([^"]+)"$', version_text, re.MULTILINE)
+          if not match:
+              raise SystemExit("Could not find version in pyproject.toml")
+
+          major, minor, patch = map(int, match.group(1).split("."))
+          if bump == "major":
+              major, minor, patch = major + 1, 0, 0
+          elif bump == "minor":
+              minor, patch = minor + 1, 0
+          else:
+              patch += 1
+
+          next_version = f"{major}.{minor}.{patch}"
+          output.write_text(
+              f"changed=true\nbump={bump}\nversion={next_version}\ntag=v{next_version}\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Stop when no releasable commits were found
+        if: steps.version.outputs.changed != 'true'
+        run: echo "No version bump needed."
+
+      - name: Update version files
+        if: steps.version.outputs.changed == 'true'
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          sed -i "s/^__version__ = .*/__version__ = \"$VERSION\"/" src/fastmodel/__init__.py
+          sed -i "s/^version=.*/version=\"$VERSION\"/" pyproject.toml
+
+      - name: Commit version bump
+        if: steps.version.outputs.changed == 'true'
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/fastmodel/__init__.py pyproject.toml
+          git commit -m "build: bump version to $VERSION"
+          git tag "v$VERSION"
+
+      - name: Push version bump and tag
+        if: steps.version.outputs.changed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          git push origin HEAD:main
+          git push origin "${{ steps.version.outputs.tag }}"
