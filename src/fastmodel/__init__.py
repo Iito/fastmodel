@@ -1,4 +1,4 @@
-__version__ = "0.0.0.dev0"  # Replaced by CI from git tag at build time
+__version__ = "1.1.0rc1"
 
 from .protocol import ServingModule
 
